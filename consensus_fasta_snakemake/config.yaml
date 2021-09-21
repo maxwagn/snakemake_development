@@ -1,0 +1,83 @@
+# GOUANIA PHYLOGENOMICS CONFIG.YAML
+# original-template file: /scratch/antwerpen/grp/asvardal/projects/anabantoid/analyses/BettaGenomics/snakemake/VariantCalling
+# This file should contain everything to configure the workflow on a global scale.
+# In case of sample based data, it should be complemented by a samples.tsv file that contains
+# one row per sample. It can be parsed easily via pandas.
+#
+#
+
+sample_mt: /scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/metadata/Mastertable_Gouania_genomics_28052020.tsv 
+
+ana_dir: /scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses
+
+callset:
+  id: 202007Gouania
+
+ref:
+  species: "Gouania adriatica"
+  name: GCF_900634775.1_fGouWil2.1 
+  base_fn: /scratch/antwerpen/grp/asvardal/projects/clingfishes/reference/GCF_900634775.1_fGouWil2.1_genomic_chromnames
+  #base_fn: /scratch/antwerpen/grp/asvardal/projects/clingfishes/reference/GCF_900634775.1_fGouWil2.1_genomic_chromnames
+  extension: .fna
+
+
+gatk_params:
+  samples_per_batch: 20
+
+
+#filter_id: "splendens14pct-filter"
+
+variant_mask_path: "output/VariantCalling/{callset_id}"
+
+variant_filters:
+  LowQual:
+    expression: "QUAL < 50.0"
+    description: "Low quality"
+  ExcessHet:
+    expression: "ExcessHet > 30.0"
+    description: "Excess heterozygosity."
+  StrandBias:
+    expression: "FS > 40.0"
+    description: "Highly significant strand bias."
+  ReadPos:
+    expression: "ReadPosRankSum < -8.0"
+    description: "Bias in read position."
+  HaplotypeScore:
+    expression: "HaplotypeScore > 13.0"
+    description: "Low consistency of the site with two (and only two) segregating haplotypes."
+
+
+variant_masks:
+  LowCov:
+    file: "{callset_id}_{filter_id}_low_coverage_{chrom}.bed.gz"
+    description: "Total coverage < 993 in dataset with median 2314. Correspoding to bottom 4.0 %"
+  ExcessCov:
+    file: "{callset_id}_{filter_id}_excessive_coverage_{chrom}.bed.gz"
+    description: "Total coverage > 2826 in dataset with median 2314.  Correspoding to top 4.0 %"
+  LowMQ:
+    file: "{callset_id}_{filter_id}_low_mapping_quality_{chrom}.bed.gz"
+    description: "Root mean square MQ < 30"
+  ExcessMQ0:
+    file: "{callset_id}_{filter_id}_excessive_mq0_{chrom}.bed.gz"
+    description: "Fraction of MQ0 reads > 0.15"
+  NoCov:
+    file: "{callset_id}_no_coverage_{chrom}.bed.gz"
+    description: "No coverage found in bams"
+
+
+
+#vcf_subsamples:
+# remove_outliers:
+#   remove_samples: ['cichlid7020377']
+
+
+#pca:
+# remove_outliers:
+#   input_id: all
+
+
+
+
+#139 0 ... 6
+# 6 *20
+#2,4,5,6 bzip2 htslib

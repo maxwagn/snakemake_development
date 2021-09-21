@@ -1,0 +1,212 @@
+import pandas as pd
+import numpy as np
+import os
+jn = os.path.join
+
+
+#snakemake -p --profile qsub_hs_test --keep-going --immediate-submit
+
+
+## Config
+configfile: "config.yaml"
+
+ana_dir = config['ana_dir']
+callset_id = config['callset']['id']
+
+#Global parameters
+CHROMOSOMES = [str(i) for i in range(1,25) if i not in [23] ] # +  ['MT']
+#callset_id = config['callset']['id']
+
+sample_mt = pd.read_csv(config["sample_mt"],
+                        dtype=str, sep='\t').set_index("sequence_id", drop=False)
+sample_mt.drop_duplicates(inplace=True)
+n_samples = len(sample_mt)
+print(n_samples)
+
+def is_num(s):
+    try:
+        int(s)
+        return True
+    except ValueError:
+        return False
+
+#This is important, because otherwise the wildcards in the rules are ambiguous
+wildcard_constraints:
+    i="\d+",
+    contig="\d+",
+    ref_fn=".*.fa",
+    sequence_id="\w+",
+    filter_id="[^.]+",
+
+def logfun(wildcards, rule):
+    return rule
+
+#index_fn = ref.rsplit('.',1)[0] + '.bwt'
+ref_indexes = ['.amb', '.ann', '.bwt', '.pac','.sa','.fai']
+#read_direction = ["1","2"]
+
+quality = [10, 20, 30]
+
+
+rule all:
+    input:
+        #expand("/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}_CONSENSUS.fasta", 
+         #        sequence_id=sample_mt['sequence_id'].values)
+        #expand("/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/FastaFiltered{qual}/{sequence_id}_CONSENSUS_filtered{qual}.fasta",
+                 #qual=quality, sequence_id=sample_mt['sequence_id'].values)
+        #"/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/4616STDY8352652.site_stats.tsv.gz"
+        #'{}/_data/Alignment/{}/4616STDY8352652.fixmate.sort.markdup.rg.bam.flagstat'.format(ana_dir, config['ref']['name'])       
+        #expand('/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}.site_stats.tsv.gz', 
+         #       sequence_id=sample_mt['sequence_id'].values),
+        expand('/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}.site_stats.pdf',
+                 sequence_id=sample_mt['sequence_id'].values[1])
+
+
+rule bwa_index:
+    input:
+        ref="{}{}".format(config['ref']['base_fn'], config['ref']['extension'])
+    output:
+        "{}{}.amb".format(config['ref']['base_fn'], config['ref']['extension']),
+        "{}{}.ann".format(config['ref']['base_fn'], config['ref']['extension']),
+        "{}{}.bwt".format(config['ref']['base_fn'], config['ref']['extension']),
+        "{}{}.pac".format(config['ref']['base_fn'], config['ref']['extension']),
+        "{}{}.sa".format(config['ref']['base_fn'], config['ref']['extension']),
+        "{}{}.fai".format(config['ref']['base_fn'], config['ref']['extension']),
+        dict="{}.dict".format(config['ref']['base_fn'])
+    params:
+        name=config['ref']['name']
+    shell:
+        """
+        samtools faidx {input.ref}
+        samtools dict -a {params.name} -s 'Gouania adriatica'  {input.ref} -o {output.dict}
+        bwa index {input.ref}
+        """
+
+def get_read_fn(wildcards):
+    return sample_mt.loc[wildcards.sequence_id,'read_files']
+
+rule align_reads:
+    priority: 50
+    input:
+        reads = get_read_fn,
+        ref = config['ref']['base_fn'] + config['ref']['extension'],
+        indices = [config['ref']['base_fn']+config['ref']['extension'] + ex for ex in ref_indexes]
+    output:
+        bam='{}/_data/Alignment/{}/{{sequence_id}}.fixmate.sort.markdup.rg.bam'.format(ana_dir, config['ref']['name'])
+    threads: 12
+    resources:
+        mem_gb=lambda wildcards, threads: threads*2,
+        walltime=48
+    params:
+        add_cpus = lambda wildcards, threads: threads-1,
+        fb = lambda wildcards: '{}/_data/Alignment/{}/{}'.format(ana_dir, config['ref']['name'],
+                                                                         wildcards.sequence_id),
+        #ext = lambda wildcards: sample_mt.loc[wildcards['sequence_id'],
+        #                                      'read_files'].rsplit('.',1)[-1],
+        sample_id = lambda wildcards: sample_mt.loc[wildcards.sequence_id, 'unique_id']
+        #rg = 'test',# -R '{params.rg}' #could specifiy read group like this
+    run:
+        s = sample_mt.loc[wildcards['sequence_id']]
+        #-F 0x200 means remove QC failed reads;
+        # don't use -M in bwa mem!!
+        if s['read_type'] == 'cram':
+            c0 = 'samtools fastq -F 0x200 {input.reads} | bwa mem -t {threads} -R "@RG\\tID:{params.sample_id}\\tSM:{wildcards.sequence_id}\\tPL:ILLUMINA" -p {input.ref} - '
+        elif s['read_type'] == 'bam':
+            c0 = 'samtools sort -n {input.reads} | samtools fastq -F 0x200 - | bwa mem -t {threads} -R "@RG\\tID:{params.sample_id}\\tSM:{wildcards.sequence_id}\\tPL:ILLUMINA" -p {input.ref} - '
+        elif s['read_type']  == 'fastq_pe':
+            ext = s['read_files'].rsplit('.',1)[-1]
+            if ext=='gz':
+                c0 = 'bwa mem -t {{threads}} -R "@RG\\tID:{{params.sample_id}}\\tSM:{{wildcards.sequence_id}}\\tPL:ILLUMINA" {{input.ref}} <(gzip -dc {}) <(gzip -dc {}) '.format(s['read_files'].split(','))
+            else:
+                c0 = 'bwa mem -t {{threads}} -R "@RG\\tID:{{params.sample_id}}\\tSM:{{wildcards.sequence_id}}\\tPL:ILLUMINA" {{input.ref}} {} {} '.format(s['read_files'].split(','))
+        #elif s['read_type']  == 'fastq_interleaved':
+        elif s['read_type']  in ['fastq_single', 'fastq_interleaved']:
+            ext = s['read_files'].rsplit('.',1)[-1]
+            if ext=='gz':
+                c0 = 'bwa mem -p -t {{threads}} -R "@RG\\tID:{{params.sample_id}}\\tSM:{{wildcards.sequence_id}}\\tPL:ILLUMINA" {{input.ref}} <(gzip -dc {}) '.format(s['read_files'])
+            else:
+                c0 = 'bwa mem -p -t {{threads}} -R "@RG\\tID:{{params.sample_id}}\\tSM:{{wildcards.sequence_id}}\\tPL:ILLUMINA" {{input.ref}} {} '.format(s['read_files'])
+        else:
+            raise ValueError("{} Sample_mt read_type must be in: [cram, bam, fastq_pe, fastq_single, fastq_interleaved].".format(wildcards['sequence_id']))
+
+        c1 = (" | samtools fixmate -@ {params.add_cpus} -m - - "
+           " | samtools sort -T {params.fb}.sort.tmp -@ {params.add_cpus} - "
+           " | samtools markdup -T {params.fb}.markdup.tmp -@ {params.add_cpus} - {params.fb}.fixmate.sort.markdup.rg.bam; ")
+
+        c2 = "  samtools index {params.fb}.fixmate.sort.markdup.rg.bam"
+
+        shell(c0 + c1 + c2)
+
+
+rule flagstat:
+    input:
+        bam='/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/Alignment/{ref_name}/{sequence_id}.fixmate.sort.markdup.rg.bam'
+    output:
+        flagstat='/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/Alignment/{ref_name}/{sequence_id}.fixmate.sort.markdup.rg.bam.flagstat'
+    resources:
+        mem_gb=1,
+        walltime=1
+    shell:
+       'samtools flagstat {input.bam} > {output.flagstat}'
+
+
+rule get_site_stats_ind:
+    input:
+        ref = config['ref']['base_fn'] + config['ref']['extension'],
+        bam = "/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/Alignment/GCF_900634775.1_fGouWil2.1/{sequence_id}.fixmate.sort.markdup.rg.bam"
+    output:
+        site_stats = "/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}.site_stats.tsv.gz"
+    threads: 7
+    resources:
+        mem_gb = lambda wildcards, threads: threads*2,
+        walltime = 72
+    shell:
+        (" (echo -e 'CHROM\tPOS\tREF\tALT\tQUAL\tDP\tMQ\tNS\tMQSB\tMQ0F'; "
+        "  bcftools mpileup --threads {threads} -Ou -f {input.ref} {input.bam} "
+        " | bcftools call --threads {threads} -f GQ -m -Ou | bcftools +fill-tags --threads {threads} -Ou "
+        " | bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\t%QUAL\t%INFO/DP\t%INFO/MQ\t%INFO/NS\t%INFO/MQSB\t%INFO/MQ0F\n' -) | bgzip -c > {output.site_stats}")
+
+rule vis_site_stats:
+    input:
+        site_stats = "/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}.site_stats.tsv.gz"
+    output:
+        "/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}.site_stats.pdf"
+    shell:
+        "python3 scripts/SiteStatsViz.py {input.site_stats}"
+
+rule consensus_sequence:
+    input:
+        bam = "/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/Alignment/GCF_900634775.1_fGouWil2.1/{sequence_id}.fixmate.sort.markdup.rg.bam",
+        ref = config['ref']['base_fn'] + config['ref']['extension']
+    output:
+        cons_fastq = "/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}_CONSENSUS.fastq"
+    resources:
+        mem_gb = lambda wildcards, threads: threads*2,
+        walltime = 48
+    shell:
+        "samtools mpileup -uf {input.ref} {input.bam} | bcftools call -c | vcfutils.pl vcf2fq > {output.cons_fastq}"
+
+
+rule fastq_to_fasta:
+    input:
+        fastq = "/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}_CONSENSUS.fastq"
+    output:
+        fasta = "/scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/FastaFiltered{qual}/{sequence_id}_CONSENSUS_filtered{qual}.fasta"
+    resources:
+        mem_gb = lambda wildcards, threads: threads*2,
+        walltime = 1
+    params:
+        q = '{qual}'
+    shell:
+        "seqtk seq -aQ64 -q{params.q} -n N {input.fastq} > {output.fasta}"
+
+
+#rule vis_site_stats:
+ #   input:
+  #      site_stats = "scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}.site_stats.tsv.gz"
+  #  output:
+  #      out_pdf = "scratch/antwerpen/grp/asvardal/projects/clingfishes/projects/GouaniaPhylogenomics/analyses/_data/ConsensusSequence/{sequence_id}.site_stats.pdf"
+  #  shell:
+  #      "python3 scripts/site_stats_viz.py {input.site_stats}"
+
+
