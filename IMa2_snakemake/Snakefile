@@ -1,0 +1,62 @@
+import random
+
+combinations = ["Umdloti_Mtwalume", "Umdloti_Umkomaas", "Umdloti_Sheffield",
+               "Mtwalume_Umkomaas", "Mtwalume_Sheffield", "Umkomaas_Sheffield"]
+
+runs = ["run1", "run2", "run3"]
+
+
+rule all:
+    input:
+        #expand("{comb}_{run}_IMa2.txt",  comb = combinations[3], run = runs)
+        #expand("results/{comb}/1mio_{comb}_{run}_IMa2.txt", comb = combinations, run = runs)
+        expand("results/fin/1mio_{comb}_IMa2.tsv", comb = combinations)
+
+
+rule IMa2Prep:
+    input:
+        "Input_files/COI_ZA_Fortuynia_IMA2.fas"
+    output:
+        "Input_files/{comb}.IMa2.txt"
+    shell:
+        "python scripts/imaprep.py {input} {wildcards.comb}"
+
+rule IMa2:
+    input:
+        "Input_files/{comb}.IMa2.txt"
+    output:
+        #"{comb}_{run}_IMa2.txt"
+        fi="results/{comb}/1mio_{comb}_{run}_IMa2.txt",
+        logfile = "logs/1mio_{comb}_{run}_IMa2.log"
+    threads:1
+    resources:
+        walltime = 72,
+        mem_gb = 10
+    params:
+        burnin = 100000,
+        duration = 1000000,
+        #seed = random.seed(),
+        steps = 100,
+    #-iAltos_IMa_red.txt -oAltos_IMa2_1.out -b100000 -hfg -hn20 -hk10 -ha0.975 -hb0.75 -q300 -m1 -p23567 -s2468 -u3 -t5 -r5 -l24.0
+    #ima2-8.27.12/src/IMa2 -b {params.burnin} -i {input} -hfg -hn 20 -hk 10 -ha 0.975 -hb 0.75 -q 300 -m 1 -p 23567 -s {params.seed} -u 2 -t 5 -r 5 -l {params.duraition} -d {params.steps} -o {output}
+    #"works: ima2-8.27.12/src/IMa2 -i{input} -o{output} -b{params.burnin} -hfg -hn20 -hk10 -ha0.975 -hb0.75 -q300 -m1 -p23567 -s$RANDOM -u2 -t5 -r5 -l{params.duration} -d{params.steps} "
+    shell:
+        """
+        ima2-8.27.12/src/IMa2 -i{input} -o{output.fi} -b{params.burnin} -hfg -hn20 -hk10 -ha0.975 -hb0.75 -q300 -m1 -p23567 -s$RANDOM -u2 -t5 -r5 -l{params.duration} -d{params.steps} | tee > {output.logfile} 
+        """
+
+rule extract_Ima2_results:
+    input:
+        run1 = "results/{comb}/1mio_{comb}_run1_IMa2.txt",
+        run2 = "results/{comb}/1mio_{comb}_run2_IMa2.txt",
+        run3 = "results/{comb}/1mio_{comb}_run3_IMa2.txt",
+    output:
+        #with_ne = "results/fin/1mio_{comb}_IMa2_migration_withNe.tsv",
+        outtable = "results/fin/1mio_{comb}_IMa2.tsv"
+    shell:
+        # python scripts/extract_IMA2results_withNe.py {input.run1} {input.run2} {input.run3} {output.with_ne}
+         """ 
+         python scripts/extract_IMA2results.py {input.run1} {input.run2} {input.run3} {output.outtable}
+         """
+
+
